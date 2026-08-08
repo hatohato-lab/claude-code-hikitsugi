@@ -1,0 +1,14 @@
+# 個人の設計メモ（公開しない。個人環境のパスを含むため）
+00_設計書/
+
+# Python
+__pycache__/
+*.pyc
+
+# 出力・一時ファイル（実ログ・実出力は絶対にコミットしない）
+out/
+*.jsonl
+!samples/*.jsonl
+!eval/corpus/*.jsonl
+handoff.md
+digest.md
