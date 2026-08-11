@@ -67,6 +67,35 @@ def _identity(text):
     return text
 
 
+# ---------------------------------------------------------------- 作業記録の検出
+
+# 引き継ぎで要るのは事務処理の記録＝「何をしたか・何が起きたか・どう直したか」。
+# AI側の発言に、その3種類が定型句として現れる。人との関係性・感情は対象にしない。
+# 判定は上から順（先に当たったものを採用）。完了報告に「エラーを直した」等が
+# 混ざることがあるため、成否の確定した「完了」を最優先で見る。
+WORK_PATTERNS = [
+    (re.compile(r"完了(し|です|しました)|完成(し|です|しました)|公開しました|保存しました"
+                r"|作成しました|登録しました|記入しました|終わりました|できました"
+                r"|プッシュ(済み|しました)|\bPASS\b"), "完了"),
+    # 「トライ&エラー」等の慣用句は失敗報告ではないので除く
+    (re.compile(r"失敗し|(?<!トライ&)(?<!トライアンド)エラー|できませんでした|うまくいか"
+                r"|こけ(まし|て)|即死|見つかりませ|問題が(見つ|あり)|不具合"
+                r"|落ちて(い)?ました"), "失敗"),
+    (re.compile(r"修正し|直します|直しました|再実行|再起動|やり直|復元し"
+                r"|対応しました|変更しました|入れ替え"), "対処"),
+]
+
+
+def detect_work(text):
+    """AIの発言が作業報告なら、その種別（完了・失敗・対処）を返す。違えば None。"""
+    if not text:
+        return None
+    for pat, label in WORK_PATTERNS:
+        if pat.search(text):
+            return label
+    return None
+
+
 # ---------------------------------------------------------------- 時刻
 
 def to_local(ts):
@@ -250,6 +279,7 @@ def extract(path, since=None, max_chars=240, masker=None):
     data = {
         "timeline": [],       # (dt, "人"|"AI", text)
         "errors": [],         # (dt, snippet)
+        "work": [],           # (dt, "完了"|"失敗"|"対処", text)
         "files_written": Counter(),
         "titles": [],
         "first_dt": None,
@@ -292,7 +322,14 @@ def extract(path, since=None, max_chars=240, masker=None):
             if texts:
                 text = re.sub(r"\s+", " ", " ".join(texts)).strip()
                 if text:
-                    data["timeline"].append((dt, "AI", m(text)[:max_chars]))
+                    full = m(text)
+                    data["timeline"].append((dt, "AI", full[:max_chars]))
+                    label = detect_work(full)
+                    if label:
+                        row = (dt, label, full[:160])
+                        # 同じ報告の重複（連続する同一文）は1件に畳む
+                        if not data["work"] or data["work"][-1][1:] != row[1:]:
+                            data["work"].append(row)
             for tu in _iter_content_items(msg, "tool_use"):
                 if tu.get("name") in ("Write", "Edit", "NotebookEdit"):
                     fp_ = (tu.get("input") or {}).get("file_path") or ""
@@ -312,6 +349,7 @@ HANDOFF_INSTRUCTION = """\
 2. 次の7点に整理して、ユーザーに宣言する
    ①このチャットの目標 ②決まったこと（理由つき） ③未完了タスクと次の一手
    ④つまずき履歴（同じ失敗をしない） ⑤保留中の判断 ⑥固有名詞の辞書 ⑦読み取れなかった不明点
+   ※①〜④の材料は「作業の記録」（完了／失敗／対処）の節を使う
 3. 細部が必要になったら、下記の生ログをgrepで検索する（全部は読まない。大きすぎる）
 4. [MASKED:...] は秘密情報の跡。**復元も推測もしない**
 5. 材料に無いことを「決まっていた」と思い込まない。曖昧なら⑦で正直に言う
@@ -371,8 +409,17 @@ def write_outputs(data, log_path, out_dir, do_mask=True, since=None):
         else:
             fp.write("- （記録なし）\n")
 
-        fp.write("\n## エラー・つまずきの記録（直近30件）\n\n")
-        errs = data["errors"][-30:]
+        fp.write("\n## 作業の記録（何をしたか・何が起きたか・どう直したか・直近40件）\n\n")
+        fp.write("種別は 完了／失敗／対処 の3つ。前のチャットの事務処理の流れはここで追える。\n\n")
+        works = data.get("work", [])[-40:]
+        if works:
+            for dt, label, text in works:
+                fp.write(f"- {fmt_day(dt)} {fmt_hm(dt)} 【{label}】{text}\n")
+        else:
+            fp.write("- （記録なし）\n")
+
+        fp.write("\n## プログラムのエラー（参考・直近15件）\n\n")
+        errs = data["errors"][-15:]
         if errs:
             for dt, snip in errs:
                 fp.write(f"- {fmt_day(dt)} {fmt_hm(dt)}  {snip}\n")
@@ -466,7 +513,8 @@ def main(argv=None):
     print(f"  引き継ぎメモ: {handoff}")
     print(f"  ダイジェスト: {digest}")
     print(f"  人の発言 {human:,}件 / AI発言 {len(data['timeline']) - human:,}件 / "
-          f"エラー記録 {len(data['errors']):,}件 / 書き込みファイル {len(data['files_written']):,}種")
+          f"作業記録 {len(data['work']):,}件 / エラー記録 {len(data['errors']):,}件 / "
+          f"書き込みファイル {len(data['files_written']):,}種")
     if args.no_mask:
         print("  ★警告: マスキング無効。出力に秘密情報が含まれ得ます。共有しないでください。")
     return 0

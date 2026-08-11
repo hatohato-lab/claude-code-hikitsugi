@@ -96,6 +96,19 @@ def selftest():
         check("system-reminderは項目単位で除外し、同居する本文は残す",
               "本文はこちらです" in D and "これはシステム通知" not in D)
         check("エラーが記録される", "Error: design.md not found" in H)
+
+        # ---- 3-2. 作業の記録（何をしたか・何が起きたか・どう直したか）
+        sec = ""
+        if "## 作業の記録" in H and "## プログラムのエラー" in H:
+            sec = H.split("## 作業の記録", 1)[1].split("## プログラムのエラー", 1)[0]
+        check("作業記録：完了が種別つきで残る",
+              "【完了】" in sec and "実装が完了しました" in sec)
+        check("作業記録：失敗が種別つきで残る",
+              "【失敗】" in sec and "即死していました" in sec)
+        check("作業記録：対処が種別つきで残る",
+              "【対処】" in sec and "再実行します" in sec)
+        check("作業記録：ユーザーの発言は混入しない",
+              "入らないはず" not in sec)
         check("書き込みファイルが記録される", "design.md" in H)
         check("チャット名（タイトル）が引き継がれる", "オラクル検証チャット" in H)
         check("生ログへのgrep導線がある", "grep -n" in H)
