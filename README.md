@@ -27,7 +27,7 @@ Python 3.8+ のみ。追加パッケージ不要。設定ファイル編集不�
 新しいチャットを開いて、一言。
 
 ```
-就活のチャットを継いで
+レシピ開発のチャットを継いで
 ```
 
 Claude が自動で、①前のセッションを名前で特定 → ②引き継ぎメモを生成 →
@@ -65,7 +65,7 @@ Claude Code は毎ターン会話履歴全体を送るため、チャットに�
 
 ```bash
 python skill/hikitsugi.py --list              # セッション一覧（名前つき）
-python skill/hikitsugi.py --find "就活"        # 名前で検索
+python skill/hikitsugi.py --find "レシピ"        # 名前で検索
 python skill/hikitsugi.py --session 1a2b3c4d  # 引き継ぎメモを生成
 ```
 
