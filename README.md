@@ -4,6 +4,10 @@
 
 *One phrase in a new chat — "take over my previous chat" — and Claude Code resumes where you left off, rebuilt from the untouched raw session log.*
 
+## しくみ（図解）
+
+![しくみ](docs/しくみ.svg)
+
 ## 目的
 
 Claude Code の長いチャットは、いずれ新しいチャットへ移らざるを得なくなります。
