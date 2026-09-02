@@ -4,14 +4,13 @@
 
 - Claude Code の会話ログ（.jsonl）から引き継ぎメモを再建するツール。
 - 形態は**スキル型**（`skill/SKILL.md`＋`skill/hikitsugi.py`）。
-  親フォルダ規約の標準形（`.claude/agents/`のサブエージェント型）とは意図的に異なる。
   理由：本ツールは「新しいチャット本体」が一言で発動する必要があり、サブエージェントでは会話の主導権を持てないため。
 - 依存は標準ライブラリのみ。通信しない。これを壊す変更はしない。
 
 ## 確認コマンド（変更したら必ず回す）
 
 ```bash
-python eval/oracle.py --selftest      # 機械判定20項目。全PASSが合格条件
+python eval/oracle.py --selftest      # 機械判定24項目。全PASSが合格条件
 python skill/hikitsugi.py --list      # 実環境での目視スモーク
 ```
 

@@ -109,7 +109,7 @@ flowchart TD
 
 出力先の既定：`~/.claude/hikitsugi-out/<セッションID>/`。時刻はローカル時刻に変換して表示します。
 
-## テスト（機械判定）
+## eval（機械判定24項目）
 
 ```bash
 python eval/oracle.py --selftest
@@ -140,6 +140,19 @@ python eval/oracle.py --selftest
 ## 名前について
 
 hikitsugi ＝「引き継ぎ」（日本語で handoff の意）。
+
+## 関連ツール（Claude Code 運用ファミリー）
+
+同じ思想（機械判定の eval 同梱・フェイルオープン・判断は人間に返す）で作った道具の家族です。
+
+| ツール | 役割 |
+|---|---|
+| **claude-code-hikitsugi**（本リポジトリ） | チャット乗り換え時の引き継ぎ（過去→未来） |
+| [claude-code-rules-sync](https://github.com/hatohato-lab/claude-code-rules-sync) | ルール変更の全チャット通知（放送） |
+| [claude-code-kokuban](https://github.com/hatohato-lab/claude-code-kokuban) | チャット間の黒板（双方向の連絡） |
+| [claude-code-context-meter](https://github.com/hatohato-lab/claude-code-context-meter) | 各チャットの容量の見える化（乗り換えどきの判断材料） |
+| [claude-code-version-guard](https://github.com/hatohato-lab/claude-code-version-guard) | Claude Code 本体のバージョンの遅れの見張り |
+| [kaizen-map](https://github.com/hatohato-lab/kaizen-map) | システムの地図と改善候補を1枚のHTMLに |
 
 ## License
 
