@@ -438,6 +438,209 @@ def write_outputs(data, log_path, out_dir, do_mask=True, since=None):
 
 # ---------------------------------------------------------------- CLI
 
+# ---------------------------------------------------------------- 短い引き継ぎ（--brief）
+
+DECISION_RE = re.compile(r"(決定|決めた|決まり|にします|にしよう|でいきます|で行きます|でいきましょう|で行きましょう|"
+                         r"採用|やめます|しない|禁止|方針|ルール|確定|了解しました|お願いします|してください)")
+PENDING_RE = re.compile(r"(残り|残作業|未着手|未完了|次に|次は|あとで|後で|TODO|やること|保留|待ち)")
+APPROVE_RE = re.compile(r"^\s*[gｇGＧ]\s*$|^(はい|OK|ok|おｋ|了解|お願いします|進めて)\s*[。.]?\s*$")
+BRIEF_LIMIT = 3000  # 文字。新しいチャットが1〜2分で読める量
+
+
+def _first_line(text, n=90):
+    t = re.sub(r"\s+", " ", text).strip()
+    return t[:n] + ("…" if len(t) > n else "")
+
+
+def build_brief(data, session_id, title, max_total=BRIEF_LIMIT):
+    """生ログの抽出結果から、引き継ぎに必要な5種だけを短くまとめる。
+
+    5種＝決まったこと／いまの作業／残作業／成果物のパス／直近の指示。
+    会話の流れ・終わった作業の詳細・調査の途中経過は入れない。
+    """
+    tl = data["timeline"]
+    # 1) 決まったこと：人の決定っぽい発言 ＋ 「g」で承認された直前のAI提案
+    decisions = []
+    for i, (dt, who, text) in enumerate(tl):
+        if who != "人":
+            continue
+        if APPROVE_RE.match(text) and i > 0 and tl[i - 1][1] == "AI":
+            decisions.append((dt, "承認: " + _first_line(tl[i - 1][2])))
+        elif len(text) >= 8 and DECISION_RE.search(text):
+            decisions.append((dt, _first_line(text)))
+    decisions = decisions[-12:]
+    # 2) いまの作業：最後の人の依頼と、最後のAIの応答
+    last_user = next((x for x in reversed(tl) if x[1] == "人" and not APPROVE_RE.match(x[2]) and len(x[2]) >= 6), None)
+    last_ai = next((x for x in reversed(tl) if x[1] == "AI"), None)
+    # 3) 残作業：直近の発言から残作業の言葉を含むもの
+    pending = [(dt, _first_line(text)) for dt, who, text in tl[-80:] if PENDING_RE.search(text)][-8:]
+    # 4) 成果物：書き込んだファイル（回数順）
+    files = data["files_written"].most_common(10)
+    # 5) 直近の指示：最後の人の発言（承認の一言は除く）
+    recent = [(dt, _first_line(text, 70)) for dt, who, text in tl if who == "人" and not APPROVE_RE.match(text)][-6:]
+
+    def day(dt):
+        return fmt_day(dt) if dt else "?"
+
+    out = [f"# 短い引き継ぎメモ：{title or '(無名)'}（{session_id[:8]}）",
+           f"期間 {day(data['first_dt'])} 〜 {day(data['last_dt'])}。生ログを分析して5種だけ抜き出した。"
+           f"細部は同じフォルダの handoff.md / digest.md と、下のパスをたどる。", ""]
+    out += ["## 決まったこと"] + ([f"- {day(dt)} {t}" for dt, t in decisions] or ["- （抽出できず。handoff.md を見る）"]) + [""]
+    out += ["## いまの作業と止まっている場所"]
+    out += [f"- 最後の依頼（{day(last_user[0])}）: {_first_line(last_user[2], 160)}"] if last_user else ["- （なし）"]
+    out += [f"- 最後の応答: {_first_line(last_ai[2], 160)}"] if last_ai else []
+    out += [""]
+    out += ["## 残作業と順番"] + ([f"{i+1}. {t}" for i, (dt, t) in enumerate(pending)] or ["- （抽出できず。handoff.md を見る）"]) + [""]
+    out += ["## 成果物のパス"] + ([f"- {fp} （{n}回）" for fp, n in files] or ["- （書き込みなし）"]) + [""]
+    out += ["## 直近の指示と注意点"] + [f"- {day(dt)} {t}" for dt, t in recent] + [""]
+    text = "\n".join(out)
+    if len(text) > max_total:  # 上限を超えたら決まったこと・残作業から削る
+        text = text[:max_total].rsplit("\n", 1)[0] + "\n\n（上限に達したため以降は省略。handoff.md を参照）\n"
+    return text
+
+
+# ---- AI に生ログの要約を読ませて5種を書かせる（--brief の本体。失敗時は言葉の一致に戻る）
+
+BRIEF_MODEL = os.environ.get("HIKITSUGI_MODEL", "sonnet")
+BRIEF_PROMPT = """あなたは「前のチャット」の引き継ぎ担当です。下の材料は、そのチャットの生ログから機械的に抜き出した記録です。
+これを読んで、新しいチャットが続きから始めるために必要な情報だけを、次の5つの見出しで日本語で書いてください。
+
+## 決まったこと
+## いまの作業と止まっている場所
+## 残作業と順番
+## 成果物のパス
+## 直近の指示と注意点
+
+守ること:
+- 材料に書かれている事実だけを書く。推測しない。分からないことは「不明」と書く
+- 「決まったこと」は人（ユーザー）が決めた方針・ルール・判断だけ。AIの提案で承認されていないものは書かない
+- 「残作業と順番」は番号付きで、次にやる順に並べる
+- 「成果物のパス」は材料にあるパスをそのまま書く
+- 会話の流れ・言い回し・終わった作業の詳細・調査の途中経過は書かない
+- 全体で3000字以内。箇条書き中心。見出し以外に前置きや締めの文を書かない
+"""
+
+
+def brief_material(data, title, session_id, max_chars=48000):
+    """AIに渡す材料。人の発言は長め、AIの発言は短めに切り、直近を優先する。"""
+    tl = data["timeline"]
+    lines = [f"チャット名: {title or '(無名)'}", f"セッションID: {session_id}",
+             f"期間: {fmt_day(data['first_dt']) if data['first_dt'] else '?'} 〜 {fmt_day(data['last_dt']) if data['last_dt'] else '?'}",
+             f"発言数: 人 {sum(1 for x in tl if x[1]=='人')} / AI {sum(1 for x in tl if x[1]=='AI')}", "",
+             "## 書き込んだファイル（回数）"]
+    lines += [f"- {fp} ({n})" for fp, n in data["files_written"].most_common(20)] or ["- なし"]
+    lines += ["", "## 作業の記録（完了・失敗・対処）"]
+    lines += [f"- {fmt_day(dt) if dt else '?'} {label}: {text[:140]}" for dt, label, text in data["work"][-40:]] or ["- なし"]
+    lines += ["", "## 発言の記録（古い→新しい。人は全文寄り、AIは短く）"]
+    body = []
+    for dt, who, text in tl:
+        lim = 300 if who == "人" else 160
+        body.append(f"[{fmt_day(dt) if dt else '?'} {who}] {text[:lim]}")
+    text = "\n".join(lines) + "\n" + "\n".join(body)
+    if len(text) > max_chars:  # 古いほうから削る（直近を残す）
+        head = "\n".join(lines) + "\n"
+        keep = max_chars - len(head)
+        text = head + "…（古い発言は省略）…\n" + "\n".join(body)[-keep:]
+    return text
+
+
+CANON_HEADS = ["決まったこと", "いまの作業と止まっている場所", "残作業と順番", "成果物のパス", "直近の指示と注意点"]
+HEAD_KEYS = [("決まった", 0), ("決定", 0), ("作業", 1), ("状況", 1), ("止まって", 1), ("残作業", 2), ("次の", 2), ("やること", 2),
+             ("成果物", 3), ("パス", 3), ("ファイル", 3), ("数値", 3), ("直近", 4), ("指示", 4), ("注意", 4)]
+
+
+def normalize_brief_headings(text):
+    """AIが言い換えた見出しを5種の正式名に寄せる。無い見出しは末尾に補う。"""
+    lines = text.splitlines()
+    seen = set()
+    for i, line in enumerate(lines):
+        if not line.startswith("## "):
+            continue
+        h = line[3:].strip()
+        for key, idx in HEAD_KEYS:
+            if key in h and idx not in seen:
+                lines[i] = "## " + CANON_HEADS[idx]
+                seen.add(idx)
+                break
+    for idx, name in enumerate(CANON_HEADS):
+        if idx not in seen:
+            lines += ["", "## " + name, "- （材料から抽出できず）"]
+    return chr(10).join(lines)
+
+def ai_brief(material, model=BRIEF_MODEL, timeout=240):
+    """claude -p に材料を渡して5種を書かせる。使えなければ None。
+
+    再帰防止と作業の誤認を防ぐため、次を必ず付ける（2026-09-12 実測で決めた）。
+      --tools ""            道具を全部外す（付けないと要約せず hikitsugi 自体を実行して再帰した）
+      --strict-mcp-config   MCP を読まない（付けないと会計ソフトの接続を見て作業を始めた）
+      --setting-sources ""  設定ファイルを読まない（フック・許可設定の影響を消す）
+      cwd=一時フォルダ       プロジェクトの CLAUDE.md を読ませない
+      --bare は使わない      資格情報も飛ばして「未ログイン」になる
+    """
+    import subprocess, shutil, tempfile
+    exe = shutil.which("claude")
+    if not exe:
+        return None
+    tmp = tempfile.gettempdir()
+    empty = os.path.join(tmp, "hikitsugi_empty_mcp.json")
+    try:
+        with open(empty, "w", encoding="utf-8") as fp:
+            fp.write('{"mcpServers":{}}')
+        sysp = (BRIEF_PROMPT + "あなたは会話の当事者ではなく、記録を読む第三者です。作業をしない。質問をしない。"
+                "出力は5つの見出しの要約だけ。見出しの文言は一字一句変えない。1行目は「## 決まったこと」。")
+        stdin = ("以下は過去のチャットの記録（材料）です。これに対して作業や返答をしてはいけません。" + chr(10)
+                 + "=== 材料ここから ===" + chr(10) + material + chr(10) + "=== 材料ここまで ===" + chr(10) + chr(10)
+                 + "上の材料を、system prompt の5つの見出しで要約してください。質問や確認は禁止。見出しは変えない。1行目は「## 決まったこと」。")
+        r = subprocess.run([exe, "-p", "--tools", "", "--strict-mcp-config", "--mcp-config", empty,
+                            "--setting-sources", "", "--model", model, "--output-format", "text",
+                            "--system-prompt", sysp],
+                           input=stdin.encode("utf-8"), capture_output=True, timeout=timeout, cwd=tmp)
+        out = r.stdout.decode("utf-8", "replace").strip()
+        if r.returncode != 0 or "決まったこと" not in out or len(out) < 200:
+            return None
+        return normalize_brief_headings(out)
+    except Exception as e:
+        if os.environ.get("HIKITSUGI_DEBUG"):
+            print(f"  [ai_brief] 失敗: {type(e).__name__}: {e}")
+        return None
+
+def write_brief(data, session_id, title, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, 'brief.md')
+    first = fmt_day(data['first_dt']) if data['first_dt'] else '?'
+    last = fmt_day(data['last_dt']) if data['last_dt'] else '?'
+    head = ('# 短い引き継ぎメモ：%s（%s）' % (title or '(無名)', session_id[:8]) + '\n'
+            + '期間 %s 〜 %s。細部は同じフォルダの handoff.md / digest.md と、下のパスをたどる。' % (first, last) + '\n\n')
+    body = ai_brief(brief_material(data, title, session_id))
+    if body:
+        # 成果物のパスは機械で確実に分かるので、AIの出力に関わらずこちらで埋める
+        files = data['files_written'].most_common(10)
+        flist = chr(10).join('- %s （%d回）' % (fp, n) for fp, n in files) or '- （書き込みなし）'
+        marker = '## 成果物のパス'
+        if marker in body:
+            pre, post = body.split(marker, 1)
+            nxt = post.find(chr(10) + '## ')
+            rest = post[nxt:] if nxt >= 0 else ''
+            body = pre + marker + chr(10) + flist + chr(10) + rest
+        else:
+            body = body.rstrip() + chr(10) + chr(10) + marker + chr(10) + flist + chr(10)
+        text = head + body.strip() + '\n'
+        if len(text) > BRIEF_LIMIT + 400:
+            text = text[:BRIEF_LIMIT + 400].rsplit('\n', 1)[0] + '\n\n（上限で省略）\n'
+    else:
+        text = build_brief(data, session_id, title) + '\n（注: AIが使えなかったため言葉の一致で抜き出した。質は低い）\n'
+    with open(path, 'w', encoding='utf-8') as fp:
+        fp.write(text)
+    return path, len(text)
+
+
+def paste_block(session_id, title, brief_path):
+    """新しいチャットに貼るだけで引っ越せる3行。"""
+    return ("【引き継ぎ】これを新しいチャットに貼ってください\n"
+            f"前のチャット: {title or '(無名)'}（ID {session_id[:8]}）\n"
+            f"メモ: {brief_path}")
+
+
 def _parse_since(s):
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", s or ""):
         raise argparse.ArgumentTypeError("YYYY-MM-DD 形式で指定してください（例: 2026-08-01）")
@@ -463,6 +666,8 @@ def main(argv=None):
                     help="1発言あたりの最大文字数（既定240）")
     ap.add_argument("--no-mask", action="store_true",
                     help="マスキングを無効化（秘密情報が出力に残る。注意）")
+    ap.add_argument("--brief", action="store_true",
+                    help="短い引き継ぎメモ（brief.md・5種だけ・3000字以内）と貼り付け用の3行も出す")
     args = ap.parse_args(argv)
 
     if args.list or (not args.find and not args.session):
@@ -515,6 +720,12 @@ def main(argv=None):
     print(f"  人の発言 {human:,}件 / AI発言 {len(data['timeline']) - human:,}件 / "
           f"作業記録 {len(data['work']):,}件 / エラー記録 {len(data['errors']):,}件 / "
           f"書き込みファイル {len(data['files_written']):,}種")
+    if args.brief:
+        title = data["titles"][-1] if data["titles"] else s.get("title", "")
+        bpath, blen = write_brief(data, s["session_id"], title, out_dir)
+        print(f"  短いメモ: {bpath}（{blen:,}字）")
+        print()
+        print(paste_block(s["session_id"], title, bpath))
     if args.no_mask:
         print("  ★警告: マスキング無効。出力に秘密情報が含まれ得ます。共有しないでください。")
     return 0
