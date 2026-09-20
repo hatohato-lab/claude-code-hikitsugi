@@ -1,8 +1,8 @@
 {
   "name": "hikitsugi",
   "displayName": "claude-code-hikitsugi",
-  "version": "3.0.0",
-  "description": "前のセッションを引き継ぐ。Claude Code が圧縮のたびに書く要約をそのまま読んで、続きから始める。",
+  "version": "4.0.0",
+  "description": "長くなったセッションを畳んで、新しいセッションで続きから始める。Claude Code が圧縮のたびに書く要約を、生ログのパスで受け渡す。",
   "author": {
     "name": "hatohato-lab",
     "url": "https://github.com/hatohato-lab"
