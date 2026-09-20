@@ -17,12 +17,51 @@ MB_LIMIT = float(os.environ.get("HIKITSUGI_MB", "15"))
 COMPACT_LIMIT = int(os.environ.get("HIKITSUGI_COMPACTS", "1"))
 
 
-def find_own_log():
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
-    if not sid:
-        return None, None
-    hits = glob.glob(os.path.join(PROJECTS, "*", sid + ".jsonl"))
-    return (hits[0], sid) if hits else (None, sid)
+def read_hook_input():
+    """UserPromptSubmit フックの標準入力（JSON）を読む。読めなければ空の辞書。
+
+    2026-09-20 修正: 以前は sys.stdin.read() の返り値を捨てていた。
+    公式のフック入力には session_id と transcript_path が入っているので、そちらを優先する。
+    """
+    try:
+        raw = sys.stdin.read()
+    except Exception:
+        return {}
+    if not raw or not raw.strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def find_own_log(hook_input=None, projects=None):
+    """測る対象のログを決める。
+
+    優先順位（2026-09-20 修正）:
+      1. フック入力の transcript_path（確実。標準のホーム配下でなくてよい）
+      2. フック入力の session_id から projects 以下を探す
+      3. 互換: 環境変数 CLAUDE_CODE_SESSION_ID から探す
+    どれも当たらなければ (None, セッションID or None) を返し、呼び出し側は無音で終わる。
+    別セッションを指す環境変数があっても、フック入力があればそちらを使う。
+    """
+    hook_input = hook_input or {}
+    root = projects or PROJECTS
+    sid = hook_input.get("session_id") or None
+
+    path = hook_input.get("transcript_path")
+    if isinstance(path, str) and path and os.path.isfile(path):
+        return path, sid or os.path.splitext(os.path.basename(path))[0]
+
+    for candidate in (sid, os.environ.get("CLAUDE_CODE_SESSION_ID")):
+        if not candidate:
+            continue
+        hits = glob.glob(os.path.join(root, "*", candidate + ".jsonl"))
+        if hits:
+            return hits[0], candidate
+        sid = sid or candidate
+    return None, sid
 
 
 def measure(path):
@@ -41,13 +80,10 @@ def measure(path):
 
 
 def main():
+    hook_input = read_hook_input()
     try:
-        sys.stdin.read()
-    except Exception:
-        pass
-    try:
-        path, sid = find_own_log()
-        if not path:
+        path, sid = find_own_log(hook_input)
+        if not path or not sid:
             return 0
         size_mb, compacts, title = measure(path)
         over = compacts >= COMPACT_LIMIT or size_mb > MB_LIMIT

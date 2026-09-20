@@ -21,7 +21,9 @@ def main():
     if not os.path.isdir(src):
         print("エラー: skill フォルダが見つかりません。リポジトリ直下で実行してください。")
         return 1
-    required = ("SKILL.md", "hikitsugi.py")
+    # 2026-09-20 修正: SKILL.md が案内する watch.py（見張りフック）が入っていなかったため追加。
+    # 説明どおり install.py だけで導入したとき、watch.py が無くて見張りを登録できなかった。
+    required = ("SKILL.md", "hikitsugi.py", "watch.py")
     missing = [n for n in required if not os.path.isfile(os.path.join(src, n))]
     if missing:
         print("エラー: 必要なファイルが見つかりません:", ", ".join(missing))

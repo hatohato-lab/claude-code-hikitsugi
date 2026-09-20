@@ -169,7 +169,14 @@ def _content_texts(message):
     return texts
 
 
-def _stringify(x, limit):
+def _stringify(x, limit=None):
+    """内容を1行の文字列にする。
+
+    2026-09-20 修正: limit を省略できるようにした。
+    以前は必ずここで切ってから呼び出し側がマスクしていたため、長い JWT などが
+    途中で切れ、3つの部分を要求するマスク規則に一致せず断片が残り得た。
+    マスクは切り詰めより先に行う（CLAUDE.md の約束）。
+    """
     if isinstance(x, str):
         s = x
     elif isinstance(x, list):
@@ -183,7 +190,7 @@ def _stringify(x, limit):
     else:
         s = str(x)
     s = re.sub(r"\s+", " ", s).strip()
-    return s[:limit]
+    return s if limit is None else s[:limit]
 
 
 def _title_of(event):
@@ -292,9 +299,14 @@ def extract(path, since=None, max_chars=240, masker=None):
 
         # タイトルは期間フィルタより先に拾う（チャット名は期間に関係なく必要）
         if etype in ("custom-title", "ai-title"):
+            # 2026-09-20 修正: タイトルもここでマスクする。
+            # 以前は生のまま data に残り、handoff.md では m() を通していたが、
+            # brief.md・貼り付け用の3行・AIへ渡す材料には未加工のまま出ていた。
             t = _title_of(ev)
-            if t and t not in data["titles"]:
-                data["titles"].append(t)
+            if t:
+                t = m(t)
+                if t not in data["titles"]:
+                    data["titles"].append(t)
             continue
 
         dt = to_local(ev.get("timestamp"))
@@ -316,7 +328,8 @@ def extract(path, since=None, max_chars=240, masker=None):
                     data["timeline"].append((dt, "人", m(text)[:max_chars]))
             for tr in _iter_content_items(msg, "tool_result"):
                 if tr.get("is_error"):
-                    data["errors"].append((dt, m(_stringify(tr.get("content"), 500))[:160]))
+                    # 2026-09-20 修正: 全文を文字列化 → マスク → 表示長へ切る の順にする
+                    data["errors"].append((dt, m(_stringify(tr.get("content")))[:160]))
         elif etype == "assistant":
             texts = _content_texts(msg)
             if texts:
@@ -334,7 +347,8 @@ def extract(path, since=None, max_chars=240, masker=None):
                 if tu.get("name") in ("Write", "Edit", "NotebookEdit"):
                     fp_ = (tu.get("input") or {}).get("file_path") or ""
                     if fp_:
-                        data["files_written"][fp_] += 1
+                        # 2026-09-20 修正: 成果物のパスも抽出の時点でマスクする
+                        data["files_written"][m(fp_)] += 1
     return data
 
 
@@ -604,14 +618,22 @@ def ai_brief(material, model=BRIEF_MODEL, timeout=240):
             print(f"  [ai_brief] 失敗: {type(e).__name__}: {e}")
         return None
 
-def write_brief(data, session_id, title, out_dir):
+def write_brief(data, session_id, title, out_dir, use_ai=False):
+    """短い引き継ぎメモを書く。
+
+    2026-09-20 修正: 既定はローカル抽出（build_brief）にした。
+    以前は --brief を付けるだけで ai_brief が走り、会話由来の材料を
+    claude -p（モデル呼び出し）へ渡していた。README と設計書が約束する
+    「完全ローカル・通信なし」と食い違うため、AI 要約は use_ai=True
+    （CLI の --ai-brief）を選んだときだけにする。
+    """
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, 'brief.md')
     first = fmt_day(data['first_dt']) if data['first_dt'] else '?'
     last = fmt_day(data['last_dt']) if data['last_dt'] else '?'
     head = ('# 短い引き継ぎメモ：%s（%s）' % (title or '(無名)', session_id[:8]) + '\n'
             + '期間 %s 〜 %s。細部は同じフォルダの handoff.md / digest.md と、下のパスをたどる。' % (first, last) + '\n\n')
-    body = ai_brief(brief_material(data, title, session_id))
+    body = ai_brief(brief_material(data, title, session_id)) if use_ai else None
     if body:
         # 成果物のパスは機械で確実に分かるので、AIの出力に関わらずこちらで埋める
         files = data['files_written'].most_common(10)
@@ -627,8 +649,10 @@ def write_brief(data, session_id, title, out_dir):
         text = head + body.strip() + '\n'
         if len(text) > BRIEF_LIMIT + 400:
             text = text[:BRIEF_LIMIT + 400].rsplit('\n', 1)[0] + '\n\n（上限で省略）\n'
-    else:
+    elif use_ai:
         text = build_brief(data, session_id, title) + '\n（注: AIが使えなかったため言葉の一致で抜き出した。質は低い）\n'
+    else:
+        text = build_brief(data, session_id, title) + '\n（注: 通信なしのローカル抽出。AI要約を使うなら --ai-brief）\n'
     with open(path, 'w', encoding='utf-8') as fp:
         fp.write(text)
     return path, len(text)
@@ -667,8 +691,15 @@ def main(argv=None):
     ap.add_argument("--no-mask", action="store_true",
                     help="マスキングを無効化（秘密情報が出力に残る。注意）")
     ap.add_argument("--brief", action="store_true",
-                    help="短い引き継ぎメモ（brief.md・5種だけ・3000字以内）と貼り付け用の3行も出す")
+                    help="短い引き継ぎメモ（brief.md・5種だけ・3000字以内）と貼り付け用の3行も出す"
+                         "（通信なしのローカル抽出）")
+    ap.add_argument("--ai-brief", action="store_true",
+                    help="--brief の中身を Claude に要約させる。★通信あり："
+                         "会話から作った材料を claude -p へ渡し、利用枠を消費する。"
+                         "指定しなければ claude は一切起動しない")
     args = ap.parse_args(argv)
+    if args.ai_brief and not args.brief:
+        args.brief = True   # --ai-brief だけでも短いメモを出す
 
     if args.list or (not args.find and not args.session):
         sessions = scan_sessions(args.projects)
@@ -722,8 +753,10 @@ def main(argv=None):
           f"書き込みファイル {len(data['files_written']):,}種")
     if args.brief:
         title = data["titles"][-1] if data["titles"] else s.get("title", "")
-        bpath, blen = write_brief(data, s["session_id"], title, out_dir)
-        print(f"  短いメモ: {bpath}（{blen:,}字）")
+        bpath, blen = write_brief(data, s["session_id"], title, out_dir,
+                                  use_ai=args.ai_brief)
+        print(f"  短いメモ: {bpath}（{blen:,}字）"
+              + ("（AI要約・通信あり）" if args.ai_brief else "（ローカル抽出・通信なし）"))
         print()
         print(paste_block(s["session_id"], title, bpath))
     if args.no_mask:
