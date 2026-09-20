@@ -1,139 +1,117 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""claude-code-hikitsugi の外部オラクル（機械判定eval）。
+"""claude-code-hikitsugi v3 の機械判定（外部オラクル）。
 
-使い方:
-    python eval/oracle.py --selftest
+  python eval/oracle.py --selftest
 
-corpus のログをエンジンに食わせ、出力を検査して合否を機械判定する。
-検査の柱は3つ：①秘密が漏れない ②壊れた入力で死なない ③引き継ぎ材料が正しく残る。
+作り物のログ（eval/corpus/）を食わせ、取り出しスクリプトと見張りフックの出力を判定する。
+全PASSが合格条件。実ログは使わない。
 """
-
-import os
-import re
-import shutil
-import subprocess
-import sys
-import tempfile
+import json, os, shutil, subprocess, sys, tempfile
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(HERE)
-ENGINE = os.path.join(REPO, "skill", "hikitsugi.py")
-CORPUS = os.path.join(HERE, "corpus", "basic.jsonl")
-
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CORPUS = os.path.join(ROOT, "eval", "corpus")
+SCRIPT = os.path.join(ROOT, "skills", "hikitsugi", "scripts", "last_summary.py")
+WATCH = os.path.join(ROOT, "hooks", "watch.py")
+PY = [sys.executable, "-X", "utf8"]
 RESULTS = []
 
 
 def check(name, ok, detail=""):
-    RESULTS.append((name, ok))
-    mark = "PASS" if ok else "FAIL"
-    print(f"  [{mark}] {name}" + (f"  ({detail})" if detail and not ok else ""))
+    RESULTS.append(ok)
+    print(("PASS " if ok else "FAIL ") + name + (f"  ({detail})" if detail and not ok else ""))
 
 
-def run_engine(args):
-    return subprocess.run(
-        [sys.executable, ENGINE] + args,
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
+def run(args, stdin=""):
+    r = subprocess.run(args, input=stdin.encode("utf-8"), capture_output=True)
+    return r.returncode, r.stdout.decode("utf-8", "replace")
 
 
 def selftest():
-    print("== claude-code-hikitsugi oracle ==")
+    with_s = os.path.join(CORPUS, "with_summary.jsonl")
+    no_s = os.path.join(CORPUS, "no_summary.jsonl")
 
-    # ---- 0. マスキング関数の単体検査
-    sys.path.insert(0, os.path.join(REPO, "skill"))
-    import hikitsugi as hk
-    unit = [
-        "111111-222222-333333-444444-555555-666666-777777-888888",
-        "sk-abcdefghijklmnop1234567890",
-        "ghp_abcdefghij1234567890abcdefghij",
-        "AKIAIOSFODNN7EXAMPLE",
-        "xoxb-1234567890-abcdefghijk",
-        "eyJabcdefghijklmnopqrstu.eyJabcdefghij.abcdefghijk",
-    ]
-    ok = all(u not in hk.mask_text("a " + u + " b") for u in unit)
-    check("マスキング単体（キー・トークン6種が消える）", ok)
-    pw = hk.mask_text("パスワード: open sesame now これは")
-    check("パスワード文脈（空白入りでも最大3語隠す）", "open" not in pw and "sesame" not in pw)
-    em = hk.mask_text("taro@example.com")
-    check("メール（先頭1文字+ドメインだけ残る）", em == "t***@example.com")
+    # ---- 構成ファイル
+    for rel in (".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", "hooks/hooks.json"):
+        p = os.path.join(ROOT, *rel.split("/"))
+        try:
+            json.load(open(p, encoding="utf-8"))
+            check(f"{rel} が JSON として読める", True)
+        except Exception as e:
+            check(f"{rel} が JSON として読める", False, str(e))
+    mp = json.load(open(os.path.join(ROOT, ".claude-plugin", "marketplace.json"), encoding="utf-8"))
+    check("marketplace.json の plugin の source が ./ を指す",
+          mp["plugins"][0].get("source") == "./")
+    hk = json.load(open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8"))
+    cmd = hk["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+    check("hooks.json が watch.py を CLAUDE_PLUGIN_ROOT 経由で呼ぶ",
+          "watch.py" in cmd and "${CLAUDE_PLUGIN_ROOT}" in cmd)
+    skill = open(os.path.join(ROOT, "skills", "hikitsugi", "SKILL.md"), encoding="utf-8").read()
+    check("SKILL.md に name: hikitsugi がある", "name: hikitsugi" in skill)
+    check("SKILL.md が last_summary.py を案内している", "last_summary.py" in skill)
+    check("SKILL.md が /compact を促す文を持つ", "/compact" in skill)
 
-    # ---- 1. corpus を一時プロジェクトに配置してエンジンを実行
-    tmp = tempfile.mkdtemp(prefix="hikitsugi-oracle-")
+    # ---- 取り出しスクリプト：要約あり
+    code, out = run(PY + [SCRIPT, "--session", with_s])
+    check("要約ありのログで終了コード0", code == 0, f"code={code}")
+    check("最後の要約を採る（新しい印がある）", "NEW-SUMMARY-MARKER" in out)
+    check("古い要約は採らない", "OLD-SUMMARY-MARKER" not in out)
+    check("圧縮回数を数える（2回）", "圧縮回数: 2回" in out)
+    check("要約の時刻と「後の会話は入っていない」の注意が出る", "後の会話は入っていない" in out)
+    check("壊れた行・辞書でない行が混ざっても落ちない", "Pending Tasks" in out)
+    check("要約の後の発言は要約に混ざらない", "要約のあとの発言" not in out)
+
+    # ---- 取り出しスクリプト：要約なし
+    code, out = run(PY + [SCRIPT, "--session", no_s])
+    check("要約なしのログで終了コード2", code == 2, f"code={code}")
+    check("要約なしのとき /compact を促す", "/compact" in out)
+
+    # ---- --find / --list（作り物の projects フォルダで）
+    tmp = tempfile.mkdtemp(prefix="hikitsugi_oracle_")
     try:
-        proj = os.path.join(tmp, "projects", "test-proj")
+        proj = os.path.join(tmp, "proj-a")
         os.makedirs(proj)
-        shutil.copy(CORPUS, os.path.join(proj, "oracletest-sample.jsonl"))
-        out_dir = os.path.join(tmp, "out")
+        shutil.copy2(with_s, os.path.join(proj, "aaaa1111-0000-0000-0000-000000000001.jsonl"))
+        shutil.copy2(no_s, os.path.join(proj, "bbbb2222-0000-0000-0000-000000000002.jsonl"))
+        code, out = run(PY + [SCRIPT, "--find", "オラクル", "--projects", tmp])
+        check("--find が名前でセッションを見つける", code == 0 and "aaaa1111" in out and "bbbb2222" not in out)
+        code, out = run(PY + [SCRIPT, "--session", "bbbb2222", "--projects", tmp])
+        check("--session がIDの先頭で解決する", "bbbb2222" in out)
+        code, out = run(PY + [SCRIPT, "--list", "--projects", tmp])
+        check("--list が2件を出す", "候補 2件" in out)
 
-        r = run_engine(["--projects", os.path.join(tmp, "projects"),
-                        "--session", "oracletest", "--out", out_dir])
-        check("実行が成功する（壊れた行・未知typeが混ざっても exit 0）", r.returncode == 0,
-              r.stderr[:200])
-
-        handoff = os.path.join(out_dir, "handoff.md")
-        digest = os.path.join(out_dir, "digest.md")
-        check("handoff.md と digest.md が生成される",
-              os.path.isfile(handoff) and os.path.isfile(digest))
-        H = open(handoff, encoding="utf-8").read() if os.path.isfile(handoff) else ""
-        D = open(digest, encoding="utf-8").read() if os.path.isfile(digest) else ""
-        both = H + D
-
-        # ---- 2. 秘密が漏れない
-        check("回復キー（通常位置）が生で残らない", "999999-888888" not in both)
-        check("回復キー（切り詰め境界をまたぐ位置）が生で残らない", "111111-222222" not in both)
-        check("マスク跡 [MASKED:recovery-key] が出力に残る", "[MASKED:recovery-key]" in both)
-        check("パスワードの値が漏れない", "open sesame" not in both)
-        check("メールが部分マスクされる", "t***@example.com" in both and "taro@example.com" not in both)
-
-        # ---- 3. 引き継ぎ材料が正しく残る
-        check("ユーザーの決定（理由つき）が残る", "SQLiteに決定" in D and "運用が軽い" in D)
-        check("AI側の発言も残る（決定の理由の供給源）", "【AI】" in D and "SQLite採用" in D)
-        check("system-reminderは項目単位で除外し、同居する本文は残す",
-              "本文はこちらです" in D and "これはシステム通知" not in D)
-        check("エラーが記録される", "Error: design.md not found" in H)
-
-        # ---- 3-2. 作業の記録（何をしたか・何が起きたか・どう直したか）
-        sec = ""
-        if "## 作業の記録" in H and "## プログラムのエラー" in H:
-            sec = H.split("## 作業の記録", 1)[1].split("## プログラムのエラー", 1)[0]
-        check("作業記録：完了が種別つきで残る",
-              "【完了】" in sec and "実装が完了しました" in sec)
-        check("作業記録：失敗が種別つきで残る",
-              "【失敗】" in sec and "即死していました" in sec)
-        check("作業記録：対処が種別つきで残る",
-              "【対処】" in sec and "再実行します" in sec)
-        check("作業記録：ユーザーの発言は混入しない",
-              "入らないはず" not in sec)
-        check("書き込みファイルが記録される", "design.md" in H)
-        check("チャット名（タイトル）が引き継がれる", "オラクル検証チャット" in H)
-        check("生ログへのgrep導線がある", "grep -n" in H)
-
-        # ---- 4. 検索・引数まわり
-        r2 = run_engine(["--projects", os.path.join(tmp, "projects"), "--find", "オラクル"])
-        check("チャット名でセッションを見つけられる（--find）",
-              r2.returncode == 0 and "oraclete" in r2.stdout)
-        r3 = run_engine(["--projects", os.path.join(tmp, "projects"),
-                         "--session", "oracletest", "--out", out_dir,
-                         "--since", "2026/08/01"])
-        check("--since の形式誤りを拒否する", r3.returncode != 0)
-        r4 = run_engine(["--projects", os.path.join(tmp, "projects"),
-                         "--session", "oracletest", "--out", out_dir,
-                         "--since", "2026-08-01"])
-        H4 = open(handoff, encoding="utf-8").read()
-        check("--since を付けてもチャット名は失われない",
-              r4.returncode == 0 and "オラクル検証チャット" in H4)
+        # ---- 見張りフック
+        marker = os.path.join(tempfile.gettempdir(), "hikitsugi_watch_oracletest-with.txt")
+        if os.path.exists(marker):
+            os.remove(marker)
+        hook_in = json.dumps({"session_id": "oracletest-with", "transcript_path": with_s})
+        code, out = run(PY + [WATCH], hook_in)
+        check("見張り：圧縮ありで案内を出す", code == 0 and "additionalContext" in out and "圧縮が2回" in out)
+        check("見張り：案内にセッション名が入る", "オラクル検証セッション" in out)
+        code, out = run(PY + [WATCH], hook_in)
+        check("見張り：同じ状態では2度出さない", code == 0 and out.strip() == "")
+        hook_in2 = json.dumps({"session_id": "oracletest-none", "transcript_path": no_s})
+        code, out = run(PY + [WATCH], hook_in2)
+        check("見張り：圧縮なしでは無音", code == 0 and out.strip() == "")
+        code, out = run(PY + [WATCH], "this is not json")
+        check("見張り：壊れた入力でも落ちない・無音", code == 0 and out.strip() == "")
+        code, out = run(PY + [WATCH], json.dumps({"session_id": "x", "transcript_path": "/no/such/file"}))
+        check("見張り：ログが無くても落ちない・無音", code == 0 and out.strip() == "")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            os.remove(os.path.join(tempfile.gettempdir(), "hikitsugi_watch_oracletest-with.txt"))
+        except OSError:
+            pass
 
-    ok_all = all(ok for _, ok in RESULTS)
-    n_ok = sum(1 for _, ok in RESULTS if ok)
-    print(f"== 結果: {n_ok}/{len(RESULTS)} PASS ==")
-    return 0 if ok_all else 1
+    passed = sum(RESULTS)
+    print(f"\n{passed}/{len(RESULTS)} PASS")
+    return 0 if passed == len(RESULTS) else 1
 
 
 if __name__ == "__main__":

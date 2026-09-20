@@ -1,0 +1,17 @@
+{
+  "name": "claude-code-hikitsugi",
+  "description": "hatohato-lab の Claude Code プラグイン。前のセッションを引き継ぐ hikitsugi を配る。",
+  "owner": {
+    "name": "hatohato-lab",
+    "url": "https://github.com/hatohato-lab"
+  },
+  "plugins": [
+    {
+      "name": "hikitsugi",
+      "source": "./",
+      "version": "3.0.0",
+      "description": "前のセッションを引き継ぐ。Claude Code が圧縮のたびに書く要約をそのまま読んで、続きから始める。",
+      "homepage": "https://github.com/hatohato-lab/claude-code-hikitsugi"
+    }
+  ]
+}

@@ -1,162 +1,105 @@
 # claude-code-hikitsugi（引き継ぎ）
 
-**新しいチャットで「◯◯のチャットを継いで」と一言いうだけで、前のチャットの続きから始められるようにする。**
+**新しいセッションで「◯◯を継いで」と一言いうだけで、前のセッションの続きから始められる。**
 
-*One phrase in a new chat — "take over my previous chat" — and Claude Code resumes where you left off, rebuilt from the untouched raw session log.*
+*Say "take over ◯◯" in a new Claude Code session, and it resumes where the old one left off — from the summary Claude Code itself wrote.*
 
-## しくみ（図解）
+## しくみ（1行）
 
-![しくみ](docs/しくみ.svg)
+Claude Code は会話を圧縮するたびに、それまでの要約（見出し9つ・平均15,000字）を生ログに1行書いている。
+このプラグインは、その最後の1行を取り出して新しいセッションに読ませるだけ。自分で要約は作らない。
 
-## 目的
+図解と詳しい説明は [docs/index.html](docs/index.html)。
 
-Claude Code の長いチャットは、いずれ新しいチャットへ移らざるを得なくなります。
-しかし新しいチャットは、前のチャットを思い出せません。
+## 入れ方（1回だけ）
 
-このツールは、無傷で残っている生ログ（`~/.claude/projects/**/*.jsonl`）から
-「引き継ぎメモ」を自動で再建し、**一言で続きから始められる**ようにします。
+### VS Code
 
-## 導入方法（1回だけ・コマンド3つ）
+入力欄で `/` を押して **Manage plugins** を開き、**Marketplaces** に次を足す。
 
-```bash
-git clone https://github.com/hatohato-lab/claude-code-hikitsugi
-cd claude-code-hikitsugi
-python install.py
+```
+hatohato-lab/claude-code-hikitsugi
 ```
 
-Python 3.8+ のみ。追加パッケージ不要。設定ファイル編集不要。
+**Plugins** に hikitsugi が出るので **Install** を押す。これでスキルと見張りフックの両方が入る。
+
+リンクから開くこともできる（VS Code が起動してインストール画面が出る）。
+
+```
+vscode://anthropic.claude-code/install-plugin?plugin=hikitsugi&marketplace=hatohato-lab/claude-code-hikitsugi
+```
+
+### ターミナル
+
+```
+/plugin marketplace add hatohato-lab/claude-code-hikitsugi
+/plugin install hikitsugi@claude-code-hikitsugi
+```
+
+Python 3.8 以上が要る。追加パッケージは不要。設定ファイルの編集も不要。
 
 ## 使い方（毎回これだけ）
 
-新しいチャットを開いて、一言。
+1. 古いセッションで `/compact` を打つ（要約がその時点まで進む）
+2. 新しいセッションを開く
+3. 一言。
 
 ```
-レシピ開発のチャットを継いで
+仕事0920を継いで
 ```
 
-Claude が自動で、①前のセッションを名前で特定 → ②引き継ぎメモを生成 →
-③読み込んで「◯◯の続きですね。未完了は△△です」と宣言して再開します。
+Claude が前のセッションのログを探し、最後の要約を読んで、
+「目標・決まったこと・残作業・止まっている場所・次の一手」を宣言して再開する。
 
-## なぜ必要か — 長いチャットの2つの限界
+要約が無いセッション（一度も圧縮されていない）を指定すると、
+「前のセッションで `/compact` を打ってください」と返る。
 
-### 1. 記憶の細部が失われる（コンパクション）
+## 見張り
 
-チャットが長くなると自動要約（コンパクション）が働き、
-数値・パス・決めた理由が消えます。要約後の記憶からは二度と戻りません。
+発言のたびに自分のログを見て、圧縮が起きていたら1回だけ知らせる。
 
-### 2. 画像が貼れなくなる（このツール誕生のきっかけ）
+> 【引き継ぎの案内】このセッション「◯◯」は圧縮が1回起きています。区切りのよいところで /compact を打ち、新しいセッションで「◯◯を継いで」と言えば続きから始められます。
 
-Claude API は、**1リクエストに含まれる画像が20枚を超えると、
-1辺2000pxを超える画像をすべて拒否**します（[公式仕様](https://platform.claude.com/docs/en/build-with-claude/vision#request-limits)）。
-Claude Code は毎ターン会話履歴全体を送るため、チャットに貼ったスクリーンショットが
-累積20枚を超えた時点で、それまで読めていたサイズの画像が
-「(media removed — rejected by API)」で読めなくなります。
+同じ状態では2度言わない。基準は圧縮回数だけで、ファイルの大きさは見ない（大きさと文脈の重さは一致しない）。
 
-つまり長いチャットは、記憶の面でも画像の面でも、いずれ新しいチャットへの移行を強制されます。
-そのとき前のチャットの文脈を失わないための道具が、これです。
+## 直接使う
 
-### 解決の材料は残っている
-
-**生ログは無傷で全部残っています**（実測：1か月のチャット＝42MB・約1,460万トークン相当）。
-問題は大きすぎて読めないことだけ。このツールはそこから引き継ぎメモを再建します。
-
-- **終了後いつでも作れる**（引き継ぎコマンドの打ち忘れという概念がない）
-- **情報源は無傷の生ログ**（要約済みの記憶ではない）
-- **二方向**：凝縮メモ＋生ログへのgrep導線（細部は新チャットが自分で掘れる）
-- **完全ローカル・通信なし**。秘密情報のマスキングは既定でON（`--ai-brief` を明示したときだけ、要約のために `claude -p` を呼びます）
-
-### コマンドとして直接使う場合
-
-```bash
-python skill/hikitsugi.py --list              # セッション一覧（名前つき）
-python skill/hikitsugi.py --find "レシピ"        # 名前で検索
-python skill/hikitsugi.py --session 1a2b3c4d  # 引き継ぎメモを生成
+```
+python skills/hikitsugi/scripts/last_summary.py --list              セッション一覧
+python skills/hikitsugi/scripts/last_summary.py --find "仕事"       名前で探す
+python skills/hikitsugi/scripts/last_summary.py --session 2dafd4fb  最後の要約を出す
 ```
 
-主なオプション：`--since 2026-08-01`（期間を絞る）／`--out DIR`（出力先）／
-`--max-chars N`（1発言の最大文字数）
+`--session` にはログファイルのパスをそのまま渡してもよい。
 
-## 公式のセッション再開機能との使い分け
-
-Claude Code には公式のセッション継続機能があります。本ツールはその代替ではなく、公式が扱わない「**新しいチャットへの乗り換え**」を担当します（2026-08時点の公式ドキュメントで確認）。
+## 公式の機能との使い分け
 
 | やりたいこと | 使うもの |
 |---|---|
-| 同じセッションをそのまま続ける | 公式 `claude --continue` / `--resume`（全履歴を復元） |
-| 大きくなったセッションを要約して軽く続ける | 公式 Resume from summary ／ `/compact` |
-| 文脈が汚れた・上限が近い・画像が貼れないので、**新しいチャットで再出発する** | **本ツール**（無傷の生ログから引き継ぎメモを再建し、細部は新チャットがgrepで掘れる） |
+| 同じセッションをそのまま続ける | 公式 `claude --continue` / `--resume` |
+| 同じセッションを軽くして続ける | 公式 `/compact` |
+| **新しいセッションで続きから始める** | **本プラグイン**（公式の要約を、公式が扱わない「別セッション」へ渡す） |
 
-- 公式ができて本ツールがしないこと：同一セッションの完全復元。
-- 本ツールができて公式に無いこと：別チャットへの引き継ぎメモ生成・生ログへの検索導線・秘密情報マスキング。
-- 公式の自動コンパクション（文脈98%で自動要約・オフ不可）は、本ツールが補う対象そのものです（要約で消えた細部を生ログ側から取り戻す）。
+## 制限
 
-```mermaid
-%%{init: {'theme':'neutral'}}%%
-flowchart TD
-  A["チャットが長くなってきた"] --> B{"どうしたい?"}
-  B -->|"同じセッションを<br/>そのまま続けたい"| C["公式 claude --continue / --resume<br/>全履歴を復元して再開"]
-  B -->|"軽くして続けたい"| D["公式 /compact ・ Resume from summary<br/>要約に置き換え（細部は消える）"]
-  B -->|"新しいチャットで<br/>再出発したい"| E["★本ツール hikitsugi"]
-  D -.->|"要約で細部が消えた／<br/>画像が貼れなくなった"| E
-  E --> F["生ログ .jsonl は無傷で全部残っている<br/>（大きすぎて直接は読めない）"]
-  F --> G["引き継ぎメモを自動再建<br/>＋秘密情報マスキング"]
-  G --> H["新チャットで一言<br/>「◯◯のチャットを継いで」"]
-  H --> I["要点はメモで即把握<br/>細部は生ログをgrepで掘る（二方向）"]
+- 圧縮されたことのないセッションには要約が無い。`/compact` を1回打つ
+- 要約は圧縮の時点で止まる。それ以降の会話は生ログにしか無い（出力に時刻を添えて注意する）
+- サブエージェントの会話は別フォルダーにあり、要約に入らない
+- 生ログの形式は Claude Code 内部のもので、版で変わり得る。目印のキーが無ければ「要約がありません」と正直に出す
+- ログの保存期間は Claude Code の設定（既定30日・`cleanupPeriodDays`）に従う
+
+## eval
+
 ```
-
-## 出力されるもの
-
-| ファイル | 中身 |
-|---|---|
-| handoff.md | 引き継ぎの入口。チャット名・期間・よく書いたファイル・**作業の記録（完了／失敗／対処）**・エラー履歴・直近発言・**生ログへのgrep導線**・新チャットへの指示 |
-| digest.md | 発言の時系列記録（【人】＝ユーザー・【AI】＝前のClaude。決定の理由はAI側の発言に残ることが多いため両方収録） |
-
-出力先の既定：`~/.claude/hikitsugi-out/<セッションID>/`。時刻はローカル時刻に変換して表示します。
-
-## eval（機械判定24項目）
-
-```bash
 python eval/oracle.py --selftest
 ```
 
-秘密の漏れ・壊れた入力への耐性・抽出の正しさを24項目で自動判定します。
+作り物のログ2本で、取り出しと見張りを26項目で機械判定する。全PASSが合格条件。
 
-## セキュリティ
+## 変更履歴
 
-- **マスキング既定ON**：切り詰め処理より先に全文へ適用します（切断面をまたぐ漏れを防ぐ設計）
-  - 回復キー・APIキー・各種トークン → `[MASKED:*]` に置換
-  - パスワード文脈 → 直後の最大3語を `[MASKED]` に置換
-  - メールアドレス → **先頭1文字とドメインは残ります**（例: `t***@example.com`。完全匿名化ではありません）
-- 解除は `--no-mask` を明示したときだけ（警告つき)
-- それでも**引き継ぎメモを共有する前は必ず目視確認**してください。マスキングは既知のパターンしか捕まえられません
-- 完全ローカル処理。ネットワーク通信は一切しません。例外は `--ai-brief` を明示した場合だけで、そのときは brief.md の要約のために会話から作った材料を `claude -p` へ渡します（`--brief` だけなら通信なし）
-
-## 制限・注意
-
-- Claude Code のログ形式は公式に「バージョンで変わり得る」とされています。本ツールは未知の形式・壊れた行を黙って読み飛ばす防御的パースで作られていますが、大きな形式変更で抽出が減る可能性はあります
-- **サブエージェント（並行作業）の会話は含まれません**（別ファイル `<セッション>/subagents/` に保存されており、本ツールは主会話のみを対象とします）
-- ログの保存期間は Claude Code 側の設定（既定30日・`cleanupPeriodDays`）に従います。消えたログからは再建できません
-
-## アンインストール
-
-`~/.claude/skills/hikitsugi/` を削除するだけ。
-
-## 名前について
-
-hikitsugi ＝「引き継ぎ」（日本語で handoff の意）。
-
-## 関連ツール（Claude Code 運用ファミリー）
-
-同じ思想（機械判定の eval 同梱・フェイルオープン・判断は人間に返す）で作った道具の家族です。
-
-| ツール | 役割 |
-|---|---|
-| **claude-code-hikitsugi**（本リポジトリ） | チャット乗り換え時の引き継ぎ（過去→未来） |
-| [claude-code-rules-sync](https://github.com/hatohato-lab/claude-code-rules-sync) | ルール変更の全チャット通知（放送） |
-| [claude-code-kokuban](https://github.com/hatohato-lab/claude-code-kokuban) | チャット間の黒板（双方向の連絡） |
-| [claude-code-context-meter](https://github.com/hatohato-lab/claude-code-context-meter) | 各チャットの容量の見える化（乗り換えどきの判断材料） |
-| [claude-code-version-guard](https://github.com/hatohato-lab/claude-code-version-guard) | Claude Code 本体のバージョンの遅れの見張り |
-| [kaizen-map](https://github.com/hatohato-lab/kaizen-map) | システムの地図と改善候補を1枚のHTMLに |
+[CHANGELOG.md](CHANGELOG.md)。v3（2026-09-20）で方式を作り直した。
+それまでは生ログを言葉の一致で解析して要約を組み立てていたが、Claude Code 自身の要約のほうが上だった。
 
 ## License
 

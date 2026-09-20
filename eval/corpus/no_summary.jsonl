@@ -1,0 +1,3 @@
+{"type":"custom-title","customTitle":"圧縮なしセッション","sessionId":"oracletest-none","timestamp":"2026-09-02T00:00:00Z"}
+{"type":"user","isSidechain":false,"timestamp":"2026-09-02T01:00:00Z","message":{"role":"user","content":"短い会話です。"}}
+{"type":"assistant","isSidechain":false,"timestamp":"2026-09-02T01:00:30Z","message":{"role":"assistant","content":[{"type":"text","text":"はい。"}]}}

@@ -1,0 +1,14 @@
+{
+  "name": "hikitsugi",
+  "displayName": "claude-code-hikitsugi",
+  "version": "3.0.0",
+  "description": "前のセッションを引き継ぐ。Claude Code が圧縮のたびに書く要約をそのまま読んで、続きから始める。",
+  "author": {
+    "name": "hatohato-lab",
+    "url": "https://github.com/hatohato-lab"
+  },
+  "homepage": "https://github.com/hatohato-lab/claude-code-hikitsugi",
+  "repository": "https://github.com/hatohato-lab/claude-code-hikitsugi",
+  "license": "MIT",
+  "keywords": ["handoff", "session", "compact", "hikitsugi"]
+}
