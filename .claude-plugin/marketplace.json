@@ -9,8 +9,8 @@
     {
       "name": "hikitsugi",
       "source": "./",
-      "version": "4.0.0",
-      "description": "長くなったセッションを畳んで、新しいセッションで続きから始める。Claude Code が圧縮のたびに書く要約を、生ログのパスで受け渡す。",
+      "version": "5.0.0",
+      "description": "長くなったセッションを畳んで、新しいセッションで続きから始める。作業を番号で選び、引き継ぎ書と貼る2行を作る。",
       "homepage": "https://github.com/hatohato-lab/claude-code-hikitsugi"
     }
   ]

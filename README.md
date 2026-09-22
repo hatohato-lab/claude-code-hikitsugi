@@ -1,37 +1,60 @@
-# claude-code-hikitsugi（引き継ぎ）
+# claude-code-hikitsugi
 
-長くなった Claude Code のセッションを、新しいセッションで続きから始める。
+長くなった Claude Code のセッションを畳んで、新しいセッションで続きから始めるためのスキル。
 
-*Hand a long Claude Code session over to a fresh one.*
+圧縮（コンパクション）が作る要約には頼らない。
+いまのセッションの記憶と生ログから、引き継ぎ書を自分で書き起こす。
 
-## 入れ方（1回だけ）
-
-入力欄で `/` を押して **Manage plugins** を開き、**Marketplaces** に次を足して **Install**。
-
-```
-hatohato-lab/claude-code-hikitsugi
-```
-
-## 使い方（3つ）
-
-1. 古いセッションで `/compact` を打つ
-2. 続けて `/hikitsugi:next` を打つ。2行が出るのでコピーする
-3. 新しいセッションを開いて、その2行を貼る
-
-出てくる2行はこの形。
+## 入れ方
 
 ```
-このログの "isCompactSummary":true を含む最後の行を読んで、続きから始めて
-C:\Users\<ユーザー名>\.claude\projects\<作業フォルダー>\<セッションID>.jsonl
+/plugin marketplace add hatohato-lab/claude-code-hikitsugi
 ```
 
-## なぜ2行なのか
+```
+/plugin install hikitsugi@claude-code-hikitsugi
+```
 
-Claude Code は会話を圧縮するたびに、それまでの要約を生ログに1行書いている。
-引き継ぎとは、その1行を新しいセッションに読ませることに尽きる。
+## 使い方
 
-Claude は自分のセッション名を見られない。名前で呼んでも届かない。
-届くのは生ログのパスだけ。それが2行目。
+いまのセッションで、こう言う。
+
+```
+引き継ぎたい
+```
+
+次の順で進む。
+
+1. このセッションの作業が、時間順の一覧で出る
+2. 引き継ぐものを番号で選ぶ（全部なら「全部」）
+3. 選んだ分だけで引き継ぎ書が作られ、保存先のパスが出る
+4. 新しいセッションに貼る2行が出る
+
+新しいセッションでその2行を貼ると、続きから始まる。
+
+## なぜ要約に頼らないか
+
+圧縮のたびに、判断の理由と細部が消える。公式ドキュメントにこう書かれている。
+
+- 圧縮直後に読み直すファイルは5件だけ。5,000トークンを超えるものは中身なしのパスだけ戻る
+- 圧縮前の思考は引き継がれない
+- `paths` 付きのルールと、下位フォルダの CLAUDE.md は要約で消える
+
+出典は SKILL.md の7節にある。
+
+## 中身
+
+```
+skills/hikitsugi/SKILL.md   スキル本体。これ1枚で動く
+.claude-plugin/             プラグインの設定
+```
+
+Python もスクリプトも使わない。SKILL.md 1枚だけ。
+
+## 制限
+
+- Windows の PowerShell を前提にしている。生ログを読むコマンドが PowerShell のため
+- 生ログのパスは環境ごとに違う。SKILL.md の3節に探し方を書いてある
 
 ## License
 
